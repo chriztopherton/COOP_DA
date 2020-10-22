@@ -1,0 +1,272 @@
+---
+title: "COOP"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+
+## Articles
+
+https://electrek.co/2020/02/23/tesla-model-3-outsold-other-evs-california-2019-combined/
+
+https://afdc.energy.gov/files/u/publication/ev_emissions_impact.pdf
+
+https://www.bts.gov/content/average-cost-owning-and-operating-automobile 
+
+https://tableau.cnra.ca.gov/t/CNRA_CEC/views/DMVDataPortal_15986380698710/STOCK_Dashboard?%3AshowAppBanner=false&%3Adisplay_count=n&%3AshowVizHome=n&%3Aorigin=viz_share_link&%3AisGuestRedirectFromVizportal=y&%3Aembed=y
+ 
+ 
+ 
+## Packages Initialization
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+#install.packages("sqldf")
+library(sqldf)
+```
+
+## Data Definitions
+```{r}
+sales = read.csv('data/sales_model_date.csv') #Number of cars sold per model from 2011 - 2019
+afv = read.csv('data/AFV_models.csv') # model offerings per Manufacturer from 1991 - 2019
+veh = read.csv('data/Vehicles.csv') %>% 
+  mutate(City.Fuel.Economy = as.numeric(City.Fuel.Economy),
+         Highway.Fuel.Economy = as.numeric(Highway.Fuel.Economy)) # car model specifications
+pop = read.csv('data/Electric_Vehicle_Population_Data.csv')
+
+stations = read.csv('alt_fuel_stations_all.csv')
+```
+
+```{r}
+g1 = pop %>% filter(str_detect(Electric.Vehicle.Type,'(PHEV)')) %>% select(Electric.Range)
+g2 = pop %>% filter(str_detect(Electric.Vehicle.Type,'(BEV)')) %>% select(Electric.Range)
+```
+
+```{r}
+t.test(g1,g2)
+```
+
+```{r}
+pop %>% group_by(Model) %>% summarise(mean(Electric.Range)) 
+```
+```{r}
+sqldf('select Model, avg("Electric.Range") from pop group by Model')
+```
+
+
+## model with most/least sales in 2019
+```{r}
+sqldf("select vehicle,max(X2019) from sales") #Tesla Model 3
+sqldf("select vehicle,min(X2019) from sales") #Mercedes B-Class (B250e)
+
+```
+
+## How many of each types exist?
+```{r}
+sqldf("select count(*) from sales where Type = 'EV'") #23
+sqldf("select count(*) from sales where Type = 'PHEV'") #32
+```
+
+> 23 EVs and 32 PHEVs in the dataset
+
+## Using CTEs, find the max/min counts of vehicles per year
+
+```{r}
+sqldf("with t1 as (SELECT 2011 - 1 + ROW_NUMBER() OVER(ORDER BY Vehicle) Year,*
+  FROM (select vehicle,max(X2011) as max from sales
+      union all select vehicle,max(X2012) from sales
+       union all select vehicle,max(X2013) from sales
+       union all select vehicle,max(X2014) from sales
+       union all select vehicle,max(X2015) from sales
+       union all select vehicle,max(X2016) from sales
+       union all select vehicle,max(X2017) from sales
+       union all select vehicle,max(X2018) from sales
+       union all select vehicle,max(X2019) from sales)),
+  t2 as (
+  SELECT 2011 - 1 + ROW_NUMBER() OVER(ORDER BY Vehicle) Year,*
+  FROM (select vehicle,min(X2011) as min from sales
+      union all select vehicle,min(X2012) from sales
+       union all select vehicle,min(X2013) from sales
+       union all select vehicle,min(X2014) from sales
+       union all select vehicle,min(X2015) from sales
+       union all select vehicle,min(X2016) from sales
+       union all select vehicle,min(X2017) from sales
+       union all select vehicle,min(X2018) from sales
+       union all select vehicle,min(X2019) from sales)
+  ) 
+  select * from t1 
+  inner join t2 on t1.year = t2.year")
+```
+
+> Tesla seems to be doing the best in the last 5 years
+
+## Find the 3rd highest count by Model from afv, return null is no 3rd highest
+
+```{r}
+sqldf(" select
+          ifnull(( select 
+                      distinct total 
+                   from afv 
+                   order by total desc 
+                   limit 1 offset 3),null
+                   ) as thirdHighest 
+          from afv limit 1")
+```
+
+
+```{r}
+veh
+```
+
+```{r}
+sqldf('
+      WITH AVG_CITY (Model,avg_cty_econ) AS (
+      select
+        Model,
+        avg("City.Fuel.Economy")
+      from veh 
+      group by Model
+      order by avg("City.Fuel.Economy") DESC),
+      AVG_HWY (Model,avg_hwy_econ) AS (
+      select 
+        Model,
+        avg("Highway.Fuel.Economy") 
+      from veh 
+      group by Model
+       order by avg("Highway.Fuel.Economy") DESC)
+      select 
+        t1.Model, 
+        t1.avg_cty_econ,
+        t2.avg_hwy_econ 
+      from AVG_CITY as t1
+      inner join AVG_HWY as t2 on t1.Model = t2.Model
+      order by t2.avg_hwy_econ desc
+      ')
+```
+
+```{r}
+veh %>% head(2)
+```
+
+## Find all models and unique ids whose "City.Fuel.Economy" is less than its group model's average
+```{r}
+sqldf('
+      with t1 (ID,Year,Model,Avg) as (
+      select 
+        "Automobile.ID",
+        "Model.Year",
+        Model, 
+        avg("City.Fuel.Economy") as avg_cty
+      from veh
+      group by Model
+      having "City.Fuel.Economy" < avg_cty)
+      select * from t1')
+```
+
+## Find models who have the lowest "City.Fuel.Economy" per Manufacturer & for Chevy alone
+
+- group by manufacturer, find lowest city econ 
+
+- be aware that two different models from the same manufacturer could have the same lowest value
+
+```{r}
+sqldf('select 
+        distinct veh.Manufacturer,
+        Model,
+        "City.Fuel.Economy" as city_econ 
+       from veh 
+      inner join (
+        select 
+          Manufacturer,
+          min("City.Fuel.Economy") as min 
+        from veh 
+       
+        group by Manufacturer) as ref
+      on ref.Manufacturer = veh.Manufacturer and ref.min = veh."City.Fuel.Economy"
+      ')
+```
+
+### sanity check for to see if above sql returns expected output for Chevy
+```{r}
+veh %>% select(Manufacturer,Model,City.Fuel.Economy) %>% filter(Manufacturer == "Chevrolet") %>% filter(City.Fuel.Economy == min(City.Fuel.Economy)) %>% distinct()
+```
+
+```{r}
+veh %>% select(X110v.Charge.Time) %>% unique()
+```
+
+
+## Use case when to bracket models into LOW,MED,HIGH groups based on charging time
+```{r}
+sqldf('
+      select distinct Model, "X110v.Charge.Time",
+      case
+        when "X110v.Charge.Time" in ("6 hrs","6 hours","6-8 hours") then "LOW"
+        when "X110v.Charge.Time" in ("15 hours","20 hours") then "MED"
+        when "X110v.Charge.Time" = "22-24 hrs" then "HIGH"
+        else NULL
+      end as "charge_durs"
+      from veh')
+```
+
+## Window functions
+
+- ROW_NUMBER() OVER ( ORDER BY COL) AS ...
+    - indexes each row by incremented values
+    
+- LAG(COL,N) OVER (ORDER BY COL) AS ... 
+    - provides access to a row at a specified physical offset which comes before current row
+
+```{r}
+wf = afv %>% filter(Manufacturer == "Chevrolet") %>% pivot_longer(!Manufacturer) %>% mutate(value = ifelse(is.na(value),0,value)) %>% head(29)
+sqldf('select  
+        ROW_NUMBER() OVER (ORDER BY Manufacturer) ind,
+        name,
+        value,
+        LAG(value,1) OVER (ORDER BY name) prev_counts
+      from wf')
+```
+
+
+```{r}
+pop
+```
+
+
+
+```{r}
+stations %>% select(Groups.With.Access.Code) %>% table()
+```
+
+
+```{r}
+stations %>% select(Access.Days.Time) %>% table() %>% data.frame() %>% filter(str_detect(.,'24 hours daily')) %>% distinct()
+```
+
+```{r}
+stations %>% select(Access.Days.Time) %>% unique()
+```
+```{r}
+calvls = read.csv('data/CA_LV123.csv')
+calvls
+```
+
+```{r}
+sqldf('select distinct City,count(*) as count from calvls group by City order by count desc')
+```
+
+```{r}
+calvls %>% filter(Station.Name == "Nissan of Irvine")
+```
+```{r}
+calvls %>% group_by(City) %>% summarise(c=n()) %>% arrange(-c)
+```
+```{r}
+calvls %>% group_by(Station.Name) %>% summarise(c = n()) %>% arrange(-c)
+```
+
+```{r}
+calvls %>% group_by(City)
+```
+
