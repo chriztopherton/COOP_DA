@@ -1,0 +1,27 @@
+---
+title: "states"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sqldf)
+```
+
+```{r}
+states = read.csv("data/state_ur.csv",sep=",")
+states
+```
+
+
+```{r}
+sectors = read.csv("data/sectors.csv") 
+sectors
+```
+
+
+
+
+
+
